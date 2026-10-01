@@ -1,0 +1,26 @@
+[worldserver]
+
+########################################
+# mod-bot-lfg-accept
+#
+# Playerbots always accept the Dungeon Finder ready check, even in combat or dead, and get pulled
+# into the dungeon if their teleport fails.
+########################################
+
+#
+#    BotLfgAccept.Enable
+#        Description: Master switch.
+#        Default:     1
+#
+
+BotLfgAccept.Enable = 1
+
+#
+#    BotLfgAccept.PullIn
+#        Description: When the group forms but a bot's teleport fails (dead, in combat, in a
+#                     vehicle), revive it, take it out of combat and teleport it in. Retries once
+#                     a second for up to two minutes after the bot accepted.
+#        Default:     1
+#
+
+BotLfgAccept.PullIn = 1
