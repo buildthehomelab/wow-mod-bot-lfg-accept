@@ -17,8 +17,9 @@ in the queue. With this module:
 - **Bots that never answer still accept.** That covers a bot whose AI is busy or idle, which would
   otherwise let the ready check time out.
 
-On stock AzerothCore, without the playerbots core fork, the module doesn't build: it needs the
-fork's `PlayerbotScript` hooks and `WorldSession::IsBot()`.
+It needs `ServerScript::OnPacketSent` and `WorldSession::IsHeadless()`. Upstream AzerothCore has
+both, and the playerbots core fork has had them since its October 2026 core-align merge. Older
+playerbots cores (with `PlayerbotScript` and `WorldSession::IsBot()`) need commit 78d2b99.
 
 ## How it works
 
