@@ -14,8 +14,8 @@
  *   3. If the group forms but a bot can't be teleported in (dead, in combat, in a vehicle), it is
  *      revived, taken out of combat and teleported in. Retries once a second for two minutes.
  *
- * Real players are never touched. Needs the playerbots core fork (PlayerbotScript,
- * WorldSession::IsBot()).
+ * Real players are never touched. Needs an AzerothCore with ServerScript::OnPacketSent and
+ * WorldSession::IsHeadless() (the playerbots core fork from its 2026-10 core-align on).
  *
  * Released under the MIT License.
  */
@@ -34,7 +34,6 @@
 #include "WorldSession.h"
 
 #include <mutex>
-#include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -61,22 +60,6 @@ namespace
     std::vector<std::pair<ObjectGuid, uint32>> pendingAccepts;  // bot, proposal ID
     std::unordered_map<ObjectGuid, time_t> acceptedAt;
     std::unordered_set<ObjectGuid> pullIns;
-
-    // The playerbots fork adds WorldSession::IsBot(); stock AzerothCore doesn't have it.
-    template <typename Session, typename = void>
-    struct HasIsBot : std::false_type { };
-
-    template <typename Session>
-    struct HasIsBot<Session, std::void_t<decltype(std::declval<Session&>().IsBot())>> : std::true_type { };
-
-    template <typename Session>
-    bool IsBotSession(Session* session)
-    {
-        if constexpr (HasIsBot<Session>::value)
-            return session->IsBot();
-        else
-            return false;
-    }
 
     void OnProposal(Player* bot, WorldPacket& packet)
     {
@@ -257,26 +240,28 @@ private:
     uint32 pullInTimer = 0;
 };
 
-class BotLfgAcceptPlayerbotScript : public PlayerbotScript
+class BotLfgAcceptServerScript : public ServerScript
 {
 public:
-    BotLfgAcceptPlayerbotScript() : PlayerbotScript("BotLfgAcceptPlayerbotScript") { }
+    BotLfgAcceptServerScript() : ServerScript("BotLfgAcceptServerScript", { SERVERHOOK_ON_PACKET_SENT }) { }
 
-    // Runs for every packet sent to every player, so bail out on the opcode first.
-    void OnPlayerbotPacketSent(Player* player, WorldPacket const* packet) override
+    // Runs for every packet sent to every session, so bail out on the opcode first. Bots are
+    // headless sessions (no socket); this hook still fires for them, CanPacketSend doesn't.
+    void OnPacketSent(WorldSession* session, WorldPacket const& packet) override
     {
-        if (!config.enabled || !player || !packet)
+        if (!config.enabled)
             return;
 
-        uint16 const opcode = packet->GetOpcode();
+        uint16 const opcode = packet.GetOpcode();
         if (opcode != SMSG_LFG_PROPOSAL_UPDATE && opcode != SMSG_LFG_TELEPORT_DENIED)
             return;
 
-        if (!IsBotSession(player->GetSession()))
+        Player* player = session->GetPlayer();
+        if (!player || !session->IsHeadless())
             return;
 
         if (opcode == SMSG_LFG_PROPOSAL_UPDATE)
-            OnProposal(player, const_cast<WorldPacket&>(*packet));  // a local in WorldSession, not const
+            OnProposal(player, const_cast<WorldPacket&>(packet));  // a local in the LFG code, not const
         else
             OnTeleportDenied(player);
     }
@@ -285,5 +270,5 @@ public:
 void AddBotLfgAcceptScripts()
 {
     new BotLfgAcceptWorldScript();
-    new BotLfgAcceptPlayerbotScript();
+    new BotLfgAcceptServerScript();
 }
