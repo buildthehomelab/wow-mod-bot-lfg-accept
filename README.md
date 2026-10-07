@@ -32,6 +32,11 @@ That only works because this module's hook runs before mod-playerbots' hook. Aze
 modules in folder name order, and `mod-bot-lfg-accept` sorts before `mod-playerbots`. **Keep the
 folder name.**
 
+## Requirements
+
+- The [mod-playerbots](https://github.com/mod-playerbots/mod-playerbots) module on the playerbots core fork ([mod-playerbots/azerothcore-wotlk](https://github.com/mod-playerbots/azerothcore-wotlk), `Playerbot` branch) from its October 2026 core-align merge. The core needs `ServerScript::OnPacketSent` and `WorldSession::IsHeadless()`. Older playerbots cores need commit 78d2b99.
+- A WoW 3.3.5a (12340) client. No SQL, no client patch.
+
 ## Installation
 
 Clone it into your AzerothCore `modules` folder, **as `mod-bot-lfg-accept`**. The folder name
@@ -62,6 +67,16 @@ rebuild. With the Docker setup, rebuild the images rather than just restarting t
 |---|---|---|
 | `BotLfgAccept.Enable` | `1` | Master switch. |
 | `BotLfgAccept.PullIn` | `1` | Revive, take out of combat and teleport in any bot whose teleport failed when the group formed. |
+
+## Troubleshooting
+
+- **The `enabled, pull-in on` line is missing from the worldserver log:** the module isn't in the build. Re-run CMake so it picks up the folder, then rebuild. With Docker, rebuild the images.
+- **Bots still decline the ready check:** the folder must be named `mod-bot-lfg-accept`. The module's hook has to run before mod-playerbots', and modules load in folder name order.
+- **A bot stays outside the dungeon:** check that `BotLfgAccept.PullIn` is `1`. It retries once a second for up to two minutes after the ready check.
+
+## Credits
+
+Author: [buildthehomelab](https://github.com/buildthehomelab)
 
 ## License
 
