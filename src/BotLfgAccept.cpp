@@ -66,6 +66,7 @@ namespace
     std::mutex lock;
     std::vector<std::pair<ObjectGuid, uint32>> pendingAccepts;  // bot, proposal ID
     std::unordered_map<ObjectGuid, time_t> acceptedAt;
+    std::unordered_map<ObjectGuid, uint32> queuedProposal;  // bot, last proposal ID queued for it
     std::unordered_set<ObjectGuid> pullIns;
 
     void OnProposal(Player* bot, WorldPacket& packet)
@@ -108,6 +109,18 @@ namespace
             return;
 
         std::lock_guard<std::mutex> guard(lock);
+
+        // Every accept but the last re-sends the proposal to all members, and bots further down the
+        // same batch still show as unanswered. Queue each bot once per proposal.
+        auto [itr, inserted] = queuedProposal.try_emplace(bot->GetGUID(), proposalId);
+        if (!inserted)
+        {
+            if (itr->second == proposalId)
+                return;
+
+            itr->second = proposalId;
+        }
+
         pendingAccepts.emplace_back(bot->GetGUID(), proposalId);
     }
 
@@ -130,6 +143,10 @@ namespace
     {
         Player* bot = ObjectAccessor::FindPlayer(guid);
         if (!bot || !bot->IsInWorld())
+            return;
+
+        // Skip a proposal that has already completed or been removed.
+        if (sLFGMgr->GetState(guid) != lfg::LFG_STATE_PROPOSAL)
             return;
 
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
@@ -171,11 +188,9 @@ namespace
 
         // Without the lock: accepting can complete the proposal, which teleports everyone and may
         // send this bot SMSG_LFG_TELEPORT_DENIED straight back through OnTeleportDenied.
-        std::unordered_set<ObjectGuid> prepared;
         for (auto const& [guid, proposalId] : accepts)
         {
-            // The same proposal can reach a bot twice in one tick; refresh it once.
-            if (config.refresh && prepared.insert(guid).second)
+            if (config.refresh)
                 PrepareBot(guid);
 
             sLFGMgr->UpdateProposal(proposalId, guid, true);
@@ -232,6 +247,7 @@ namespace
                 if (now - itr->second >= PULL_IN_WINDOW)
                 {
                     pullIns.erase(itr->first);
+                    queuedProposal.erase(itr->first);
                     itr = acceptedAt.erase(itr);
                 }
                 else
