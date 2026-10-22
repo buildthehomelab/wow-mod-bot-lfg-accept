@@ -10,12 +10,15 @@
  *      mod-playerbots reads it, so the bot's own accept/decline logic does nothing. This only
  *      works because this module loads before mod-playerbots (modules load in folder name order,
  *      and "mod-bot-lfg-accept" sorts first).
- *   2. On the next world update the module accepts the proposal for the bot.
+ *   2. On the next world update the module accepts the proposal for the bot, doing what
+ *      mod-playerbots' own accept does first: a random bot with no group is refreshed (revived,
+ *      repaired, healed, restocked) and every bot's AI is reset.
  *   3. If the group forms but a bot can't be teleported in (dead, in combat, in a vehicle), it is
  *      revived, taken out of combat and teleported in. Retries once a second for two minutes.
  *
- * Real players are never touched. Needs an AzerothCore with ServerScript::OnPacketSent and
- * WorldSession::IsHeadless() (the playerbots core fork from its 2026-10 core-align on).
+ * Real players are never touched. Builds against mod-playerbots' headers. Needs an AzerothCore
+ * with ServerScript::OnPacketSent and WorldSession::IsHeadless() (the playerbots core fork from
+ * its 2026-10 core-align on).
  *
  * Released under the MIT License.
  */
@@ -29,6 +32,9 @@
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Player.h"
+#include "PlayerbotAI.h"
+#include "Playerbots.h"
+#include "RandomPlayerbotMgr.h"
 #include "ScriptMgr.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
@@ -44,6 +50,7 @@ namespace
     struct Config
     {
         bool enabled = true;
+        bool refresh = true;
         bool pullIn = true;
     };
 
@@ -59,6 +66,7 @@ namespace
     std::mutex lock;
     std::vector<std::pair<ObjectGuid, uint32>> pendingAccepts;  // bot, proposal ID
     std::unordered_map<ObjectGuid, time_t> acceptedAt;
+    std::unordered_map<ObjectGuid, uint32> queuedProposal;  // bot, last proposal ID queued for it
     std::unordered_set<ObjectGuid> pullIns;
 
     void OnProposal(Player* bot, WorldPacket& packet)
@@ -101,6 +109,18 @@ namespace
             return;
 
         std::lock_guard<std::mutex> guard(lock);
+
+        // Every accept but the last re-sends the proposal to all members, and bots further down the
+        // same batch still show as unanswered. Queue each bot once per proposal.
+        auto [itr, inserted] = queuedProposal.try_emplace(bot->GetGUID(), proposalId);
+        if (!inserted)
+        {
+            if (itr->second == proposalId)
+                return;
+
+            itr->second = proposalId;
+        }
+
         pendingAccepts.emplace_back(bot->GetGUID(), proposalId);
     }
 
@@ -114,6 +134,41 @@ namespace
         auto const itr = acceptedAt.find(bot->GetGUID());
         if (itr != acceptedAt.end() && GameTime::GetGameTime().count() - itr->second < PULL_IN_WINDOW)
             pullIns.insert(bot->GetGUID());
+    }
+
+    // Mirrors mod-playerbots' LfgAcceptAction, which never runs because the bot sees proposal ID 0.
+    // Must run before the accept: Refresh() makes a grouped bot leave its group, and the accept can
+    // complete the proposal and put the bot in the dungeon group straight away.
+    void PrepareBot(ObjectGuid guid)
+    {
+        Player* bot = ObjectAccessor::FindPlayer(guid);
+        if (!bot || !bot->IsInWorld())
+            return;
+
+        // Skip a proposal that has already completed or been removed.
+        if (sLFGMgr->GetState(guid) != lfg::LFG_STATE_PROPOSAL)
+            return;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            return;
+
+        // Unlike mod-playerbots, this also refreshes a dead (revives it) or fighting bot: it would
+        // otherwise reach the dungeon unrepaired. Pull-in takes it out of combat later.
+        if (RandomPlayerbotMgr::instance().IsRandomBot(bot) && !bot->GetGroup())
+        {
+            RandomPlayerbotMgr::instance().Refresh(bot);
+            botAI->ResetStrategies();
+        }
+
+        // mod-playerbots only gets here alive and out of combat (it declines otherwise). Clearing the
+        // states of a dead or fighting bot would drop UNIT_STATE_DIED or aura-driven ones, and on a
+        // flight path UNIT_STATE_IN_FLIGHT: the teleport then skips the taxi cleanup and the bot
+        // arrives stuck on its flight mount.
+        if (bot->IsAlive() && !bot->IsInCombat() && !bot->IsInFlight())
+            bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+
+        botAI->Reset();
     }
 
     void AcceptPending()
@@ -134,7 +189,12 @@ namespace
         // Without the lock: accepting can complete the proposal, which teleports everyone and may
         // send this bot SMSG_LFG_TELEPORT_DENIED straight back through OnTeleportDenied.
         for (auto const& [guid, proposalId] : accepts)
+        {
+            if (config.refresh)
+                PrepareBot(guid);
+
             sLFGMgr->UpdateProposal(proposalId, guid, true);
+        }
     }
 
     // Returns false once the bot no longer needs pulling in.
@@ -187,6 +247,7 @@ namespace
                 if (now - itr->second >= PULL_IN_WINDOW)
                 {
                     pullIns.erase(itr->first);
+                    queuedProposal.erase(itr->first);
                     itr = acceptedAt.erase(itr);
                 }
                 else
@@ -215,10 +276,11 @@ public:
     void OnAfterConfigLoad(bool /*reload*/) override
     {
         config.enabled = sConfigMgr->GetOption<bool>("BotLfgAccept.Enable", true);
+        config.refresh = sConfigMgr->GetOption<bool>("BotLfgAccept.Refresh", true);
         config.pullIn = sConfigMgr->GetOption<bool>("BotLfgAccept.PullIn", true);
 
-        LOG_INFO("server.loading", "mod-bot-lfg-accept: {}, pull-in {}", config.enabled ? "enabled" : "disabled",
-            config.pullIn ? "on" : "off");
+        LOG_INFO("server.loading", "mod-bot-lfg-accept: {}, refresh {}, pull-in {}",
+            config.enabled ? "enabled" : "disabled", config.refresh ? "on" : "off", config.pullIn ? "on" : "off");
     }
 
     void OnUpdate(uint32 diff) override
