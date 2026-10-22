@@ -136,16 +136,20 @@ namespace
         if (!botAI)
             return;
 
-        // mod-playerbots only gets here alive and out of combat (it declines otherwise). Clearing the
-        // states of a dead or fighting bot would drop UNIT_STATE_DIED or aura-driven states.
-        if (bot->IsAlive() && !bot->IsInCombat())
-            bot->ClearUnitState(UNIT_STATE_ALL_STATE);
-
+        // Unlike mod-playerbots, this also refreshes a dead (revives it) or fighting bot: it would
+        // otherwise reach the dungeon unrepaired. Pull-in takes it out of combat later.
         if (RandomPlayerbotMgr::instance().IsRandomBot(bot) && !bot->GetGroup())
         {
             RandomPlayerbotMgr::instance().Refresh(bot);
             botAI->ResetStrategies();
         }
+
+        // mod-playerbots only gets here alive and out of combat (it declines otherwise). Clearing the
+        // states of a dead or fighting bot would drop UNIT_STATE_DIED or aura-driven ones, and on a
+        // flight path UNIT_STATE_IN_FLIGHT: the teleport then skips the taxi cleanup and the bot
+        // arrives stuck on its flight mount.
+        if (bot->IsAlive() && !bot->IsInCombat() && !bot->IsInFlight())
+            bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
         botAI->Reset();
     }
