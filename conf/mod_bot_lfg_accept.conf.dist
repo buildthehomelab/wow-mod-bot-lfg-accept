@@ -16,6 +16,17 @@
 BotLfgAccept.Enable = 1
 
 #
+#    BotLfgAccept.Refresh
+#        Description: Before accepting, do what mod-playerbots' own accept does: a random bot
+#                     that isn't in a group is revived, repaired, healed and restocked, and
+#                     every bot's AI is reset. Without it bots can arrive with broken gear, an
+#                     empty quiver or low health.
+#        Default:     1
+#
+
+BotLfgAccept.Refresh = 1
+
+#
 #    BotLfgAccept.PullIn
 #        Description: When the group forms but a bot's teleport fails (dead, in combat, in a
 #                     vehicle), revive it, take it out of combat and teleport it in. Retries once
